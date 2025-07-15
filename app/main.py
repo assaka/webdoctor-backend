@@ -1,25 +1,45 @@
-from fastapi import FastAPI, Form
-from fastapi.middleware.cors import CORSMiddleware
-import requests
-from bs4 import BeautifulSoup
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from scraper import scrape_website_data
+from lighthouse import run_lighthouse
+from gemini_analysis import analyze_keywords_with_gemini
 
 app = FastAPI()
 
-# CORS for frontend
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # For production, restrict this
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+class URLRequest(BaseModel):
+    url: str
+
+app = FastAPI(
+    title="AI GTM Audit",
+    description="Audit websites and Google Tag Manager setup",
+    version="1.0.0"
 )
 
-@app.post("/scrape")
-def scrape_website(url: str = Form(...)):
+# # ✅ This must come immediately after app is created
+# app.include_router(gtm.router, prefix="/gtm", tags=["GTM Audit"])
+
+@app.get("/")
+async def root():
+    return {"message": "Welcome to the AI GTM Audit API!"}
+
+@app.post("/analyze")
+async def analyze(request: URLRequest):
     try:
-        response = requests.get(url)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        title = soup.title.string if soup.title else "No Title Found"
-        return {"url": url, "title": title}
+        # 1. Scrape SEO + Cookies + GTM data
+        scraped = scrape_website_data(request.url)
+
+        # 2. Run Lighthouse audit (Headless Chrome required)
+        lighthouse_result = run_lighthouse(request.url)
+
+        # 3. Use Gemini to analyze keywords in meta and content
+        keyword_analysis = analyze_keywords_with_gemini(scraped.get("keywords", []))
+
+        return {
+            "seo_meta": scraped["seo_meta"],
+            "cookies": scraped["cookies"],
+            "datalayers": scraped["datalayers"],
+            "lighthouse": lighthouse_result,
+            "keyword_insights": keyword_analysis,
+        }
     except Exception as e:
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
